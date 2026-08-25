@@ -641,6 +641,8 @@
   "allow-external-voice-calls_description": "Permission to allow users to make and receive calls with users from external integrations.",
   "allow-internal-voice-calls": "Allow Internal Voice Calls",
   "allow-internal-voice-calls_description": "Permission to allow users to make and receive calls with other users in the workspace.",
+  "allow-screenShare-voice-calls": "Allow users to share their screen during voice calls",
+  "allow-screenShare-voice-calls_description": "Users without this permission can still watch other peer's shared screens",
   "Allow_Invalid_SelfSigned_Certs": "Allow Invalid Self-Signed Certs",
   "Allow_Invalid_SelfSigned_Certs_Description": "Allow invalid and self-signed SSL certificate's for link validation and previews.",
   "Allow_Marketing_Emails": "Allow Marketing Emails",
