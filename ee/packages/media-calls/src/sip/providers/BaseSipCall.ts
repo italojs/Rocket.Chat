@@ -420,6 +420,30 @@ export abstract class BaseSipCall extends BaseCallProvider {
 			});
 		}
 
-		await this.session.sendReferRequest(this.sipDialog, { conferenceAlias });
+		const referStatus = await this.session.sendReferRequest(this.sipDialog, { conferenceAlias });
+
+		if (referStatus === 202) {
+			logger.debug({
+				msg: 'Remote leg accepted the REFER to the escalated conference',
+				method: 'sendEscalationRefer',
+				callId,
+				conferenceId: conference._id,
+				type: this.constructor.name,
+				conferenceAlias,
+				mediaCallIds,
+			});
+			this.hangupCall('conference-escalation');
+		} else {
+			logger.warn({
+				msg: 'Unhandled response to escalation REFER',
+				method: 'sendEscalationRefer',
+				callId,
+				conferenceId: conference._id,
+				type: this.constructor.name,
+				conferenceAlias,
+				mediaCallIds,
+				referStatus,
+			});
+		}
 	}
 }
