@@ -2,205 +2,70 @@
 
 ## TL;DR
 
-- Apps implement a single `IMediaCallHandler` interface with one optional method per event.
-- Four Phase 1 lifecycle events dispatch: post-started, post-participant-joined, post-ended, and
-  pre-created (preventable and patchable).
-- Every event context carries `origin`, derived from contact types; apps classify calls without
-  knowing the routing rules.
-- Two unlinked events fire for internal calls routed over SIP; a correlation from PBX signals would
-  be unreliable.
+- Apps implement one `IMediaCallHandler` with one optional method per event.
+- Phase 1 exposes four events: post-started, post-participant-joined, post-ended, and preventable/patchable pre-created.
+- Every event includes `origin` (`internal`, `sip-outbound`, or `sip-inbound`), derived from call contacts and not persisted.
+- Internal SIP-routed calls produce two unlinked events; reliable correlation is not available.
+- Prevented calls are recorded as ended `media_calls` records with `preventedBy` and surfaced through normal history/card flows.
 
 ## Status
 
-**Accepted — Phase 1 implemented.** What this ADR decides is the Phase 1 surface in
-[Decision](#decision); that part is built and shipped. Phases 2 to 4 (act, intervene, provide) are
-**surveyed, not decided** — see the note at the head of
-[Follow-ups](#follow-ups--the-remaining-phases). One part is rejected: linking the SIP loop-back leg
-to the call it duplicates. See
-[Rejected — link the loop-back leg](#rejected--link-the-loop-back-leg-to-the-call-it-duplicates).
-
-- **Date:** 2026-08
-- **Scope:** `packages/apps-engine` (definitions), `packages/apps` (listener manager),
-  `apps/meteor/app/apps/server/bridges` and `apps/meteor/server/services/media-call` (host),
-  `ee/packages/media-calls` (hook bus)
-- **Depends on:** [ADR 0002](./0002-unified-event-result-for-pre-events.md) — the media-call
-  pre-create event is `EventResult`'s first consumer
-- **Supersedes:** the `apps-media-call-analysis` and `apps-media-call-origin-and-sip-loopback`
-  proposals
-
-The feature in scope is the Rocket.Chat **media call** — the 1:1 WebRTC/SIP direct-call system in
-`ee/packages/media-calls` plus `packages/media-signaling`, surfaced through the `media-call`
-core-service. It is a **distinct feature from Video Conferences**; video conf appears here only as
-the architectural precedent for how apps-engine exposes a call-like domain.
+**Accepted — Phase 1 implemented.** Phases 2–4 (act, intervene, provide) are surveyed but not decided. Linking SIP loop-back legs is rejected.
 
 ## Decision
 
-1. **One app-facing interface, one optional method per event.** `IMediaCallHandler`
-   (`packages/apps-engine/src/definition/mediaCalls/`) has one optional method per event, keyed by
-   `AppMethod` — the shape `IUIKitActionHandler` already established here. Per-event return-type
-   narrowing and per-event opt-out survive, and an app never writes an internal `eventType` `switch`
-   (the dispatch-side router of decision 2 is the engine's, not the app's).
-2. **One `AppInterface` member and one envelope, not one per event.** Because the interface *is* the
-   subscription, all four events travel under `AppInterface.IMediaCallHandler`: the host sends a
-   `MediaCallEvent` envelope, the `ListenerBridge` has a single case for it, and
-   `AppListenerManager.executeMediaCallEvent` (`:1303-1310`) routes on the envelope's `method`. This
-   is the one place media calls depart from the message and room events, which spend one
-   `AppInterface` member, one bridge case and one executor per event. Under the router there are two
-   executors, one per event *kind* — the serial pre loop `executePreMediaCallCreated`
-   (`:1312-1362`) and the post fan-out `executePostMediaCallEvent` (`:1375-1398`) — so prevent
-   short-circuiting and patch chaining still live in an ordinary listener loop rather than in a
-   reimplementation. Per-event return-type narrowing and per-event opt-out come from the handler
-   interface, not from the dispatch, so collapsing the members costs neither.
-3. **Four events in Phase 1.**
-   - `executePostMediaCallStarted` — from `callActivated`
-   - `executePostMediaCallParticipantJoined` — from a new `callAccepted` emitter event
-   - `executePostMediaCallEnded` — from `callEnded`
+1. **One app-facing interface.** `IMediaCallHandler` exposes one optional method per event, preserving per-event opt-out and return-type narrowing.
+2. **One dispatch envelope.** All four events use `AppInterface.IMediaCallHandler` and a `MediaCallEvent` envelope routed by `method`. Pre events retain serial prevent/patch handling; post events use fan-out.
+3. **Four Phase 1 events.**
+   - `executePostMediaCallStarted` — `callActivated`
+   - `executePostMediaCallParticipantJoined` — `callAccepted`
+   - `executePostMediaCallEnded` — `callEnded`
    - `executePreMediaCallCreated` — preventable and patchable
-4. **The pre event needs a hook bus in the EE engine, not an emitter subscription.** A veto has to
-   be awaited, and the emitter is fire-and-forget. `IMediaCallServer.setHooks` /
-   `runPreCallCreatedHook` is consulted synchronously inside `MediaCallDirector.createCall`.
-   Prevention reuses the existing `CallRejectedError('forbidden')` contract. What an app patches is
-   clamped on the way out: the features of a call with a `sip` contact are filtered to
-   `SIP_CALL_FEATURES` again (`CallDirector.ts:34-47`), because the transport decides what it can
-   carry and a patch must not put `screen-share` back on a PBX leg.
-5. **Each post-event context carries the call snapshot and nothing the snapshot already holds.** The
-   moment, the participant that joined and the way the call ended are all already on the call
-   (`activatedAt` / `acceptedAt` / `endedAt`, `callee`, `endedBy` / `hangupReason`); a flat copy
-   beside `call` would only be a second place to read the same value. Each context narrows its
-   snapshot so the timestamp it is named after is a required `Date` (`IActiveMediaCall`,
-   `IAcceptedMediaCall`, `IEndedMediaCall`). The one field that stays outside is
-   `IMediaCallEndedContext.durationMs`: the call carries the two timestamps it is computed from, not
-   the result.
-6. **The transition hands the call over, and one call's events reach an app in order.** The three
-   guarded state changes are `findOneAndUpdate`s that return the call the transition produced
-   (`MediaCalls.ts:90-155`), and `callAccepted` / `callActivated` / `callEnded` carry that document
-   (`IMediaCallServer.ts:16-29`, emitted at `CallDirector.ts:74,100,436`). Nothing reads the call
-   again on the way to an app, so the snapshot is the call **as of the transition**: an event
-   describes the call it is about, even when the call moves on while the notification waits, and a
-   post event costs no query of its own. Losing that read is also what puts the events of one call
-   in order: `MediaCallService.notifyApps` defers each one with `setImmediate`, which runs them in
-   the order they were queued, and a notification now awaits nothing between there and the JSON-RPC
-   request the app receives (`triggerEvent` → `handleEvent` → `executeListener` →
-   `executePostMediaCallEvent` → `ProxiedApp.call` → `sendRequest`, all synchronous up to the write
-   to the subprocess). An app is told a call started before it is told the call ended. What a
-   context still only guarantees is the timestamp it is named after, so `getEventTimestamp`
-   (`appEvents.ts:100-106`) drops the event and logs rather than emit one without it.
-7. **The prevention reason reaches the caller as a toast.** A `CallRejectionMessage`
-   (`packages/media-signaling/src/definition/call/common.ts`) carries plain text or an `i18n` key
-   with its `args`, threaded through `PreCallCreatedHookResult.message` →
-   `CallRejectedError.rejectionMessage` → the `rejected-call-request` signal → the client's
-   `rejected` call event and `rejectedCall` session event → `useCallRejectionToast`
-   (`packages/ui-voip/src/providers/`). App keys resolve against the `app-${appId}` namespace the
-   client registers translations under, and fall back to a workspace message. The same path carries
-   the rejections the server already sent on its own (`Call_rejected_*` in `packages/i18n`); the
-   protocol-level ones stay silent on purpose.
-8. **Every event carries an `origin`, derived at dispatch time from the two contacts.** It is not
-   persisted and not patchable. Without it, an app's only signal for where a call comes from is
-   `caller.type` / `callee.type` plus knowledge of the routing rules — host knowledge apps should
-   not have to reimplement. See [`origin`](#origin--where-a-call-comes-from).
-9. **Nothing links the two legs of a SIP-routed internal call.** The correlation cannot be made
-   reliable from what the PBX tells us, and a wrong link is worse than no link. Both legs fire their
-   own events, each labelled with its own `origin`.
+4. **Pre-create uses a hook bus.** Vetoes are awaited inside `MediaCallDirector.createCall`. Prevention throws `CallRejectedError` with reason `prevented`. Patches are clamped to transport-supported features, including SIP restrictions.
+5. **Post-event contexts carry the call snapshot.** Named timestamps are required in the relevant snapshot types; `durationMs` is the only derived context field.
+6. **Transitions hand the call to the event.** State-changing database updates return the resulting call record instead of just updating (prior behavior), avoiding an extra read and preserving per-call event order within an instance.
+7. **Prevention is recorded, not announced.** A prevented call inserts one already-ended/expired `media_calls` record containing the app's identity and optional text/translation metadata, emits `historyUpdate`, and then throws. Normal history produces the prevented entry/card. The caller hears the end-of-call tone.
+8. **Every event includes `origin`.** It is derived at dispatch time from the two contacts and is neither persisted nor patchable.
+9. **SIP loop-back legs remain unlinked.** Both legs emit independently with their own `origin`; reliable PBX correlation is unavailable.
 
-### What an app receives today
+## What an app receives
 
-The three payloads the nine decisions above add up to, as an app sees them.
-
-A plain WebRTC call between two workspace users:
+For a normal workspace-to-workspace WebRTC call:
 
 ```jsonc
-// executePreMediaCallCreated
 {
-  "caller":    { "type": "user", "id": "aaa", "username": "user1" },
-  "callee":    { "type": "user", "id": "bbb", "username": "user2" },
+  "caller": { "type": "user", "id": "aaa", "username": "user1" },
+  "callee": { "type": "user", "id": "bbb", "username": "user2" },
   "createdBy": { "type": "user", "id": "aaa", "username": "user1" },
-  "features":  ["audio", "video"],
-  "origin":    "internal"
+  "features": ["audio", "video"],
+  "origin": "internal"
 }
 ```
 
-The same user-to-user call with SIP integration enabled for internal calls fires
-`executePreMediaCallCreated` **twice** (decision 9), and each run is labelled but unlinked:
+With SIP integration, an internal call produces two unlinked events:
 
-```jsonc
-// run #1 — the leg Rocket.Chat sends to the PBX
-{ "caller": { "type": "user", "id": "aaa", "username": "user1" },
-  "callee": { "type": "sip",  "id": "1002", "username": "user2", "sipExtension": "1002" },
-  "createdBy": { "type": "user", "id": "aaa", "username": "user1" },
-  "features": ["audio"],
-  "origin": "sip-outbound" }
+- **Outbound:** user → SIP, `features: ["audio"]`, `origin: "sip-outbound"`
+- **Inbound:** SIP → user, `features: ["audio"]`, `origin: "sip-inbound"`
 
-// run #2 — the INVITE the PBX routes straight back in (same conversation)
-{ "caller": { "type": "sip",  "id": "1001", "username": "user1", "sipExtension": "1001" },
-  "callee": { "type": "user", "id": "bbb", "username": "user2" },
-  "createdBy": { "type": "sip",  "id": "1001", "username": "user1", "sipExtension": "1001" },
-  "features": ["audio"],
-  "origin": "sip-inbound" }
-```
-
-A genuinely inbound call from outside the workspace looks like run #2. That is the ambiguity
-decision 9 leaves open — why the two runs cannot be linked is
-[The open problem](#the-open-problem--one-call-two-events); how they are produced is
-[How one call becomes two](#how-one-call-becomes-two).
+A genuinely external inbound call can look like the inbound leg, so apps cannot distinguish those cases from the event payload alone.
 
 ## Consequences
 
-- Apps get one cohesive interface to implement, with per-event opt-out and per-event return-type
-  narrowing, and they inherit prevent/patch composition from the listener loop.
-- Apps can classify every media call as `internal`, `sip-outbound` or `sip-inbound` without knowing
-  the routing rules. Calls already in the database report the correct origin; no migration, no
-  persisted field.
-- A new media-call event is cheaper than a new event elsewhere in the engine, because the envelope
-  dispatch of decision 2 is already wired for the whole family: a post event needs no listener-manager
-  change at all, and none of the four events needs an `AppInterface` member or a bridge case of its
-  own. The cost moves rather than disappearing — the family shares one `IListenerExecutor` `result`
-  union, so a pre event with a new return shape widens it for every member. See
-  [the wiring recipe](#adding-an-event--the-wiring-recipe).
-- **Apps still see one internal SIP-routed conversation as two unlinked calls**, and still see
-  `callee.type === 'sip'` for a call between two workspace users. An app that needs one record per
-  conversation has no host-provided way to deduplicate.
-- An app returning `prevent` on the inbound leg rejects only that leg — the outbound leg is already
-  ringing by then, so the result is a call the PBX cannot complete rather than a cleanly refused
-  one. **An app that means to block a call must act on the outbound leg**, that is, on the event
-  where `origin` is `sip-outbound` or `internal`.
-- The two legs are not equivalent, which matters for any app that picks one. The **outbound** leg's
-  timestamps track the PBX dialog (`OutgoingSipCall.createDialog:113`, the accept at `:266`,
-  `sipDialog.on('destroy'):207`), so it spans the actual conversation and its duration and hangup
-  reason are meaningful; its `uids` lists only `user1`. The **inbound** leg carries `user2` in
-  `uids` and reports `user2`'s own accept, so it is the leg that says the callee actually answered.
+- Apps get one cohesive interface and inherit existing prevent/patch composition.
+- Apps can classify calls by origin without knowing routing rules; no migration is required.
+- Internal SIP-routed conversations remain two unlinked calls. Apps cannot deduplicate them using host-provided data.
+- To block an internal/SIP call cleanly, an app must prevent the **outbound** leg; preventing the inbound leg is too late.
+- Only app prevention currently creates a history record; other refusal paths do not. The shared mechanism can support more recorded refusals later.
+- The prevented card currently produces an in-app unread/alert; push, email, and desktop notifications remain suppressed.
+- SIP outbound and inbound legs have different timestamp/user semantics: outbound tracks the PBX dialog; inbound reflects the callee's acceptance.
 
 ## Deliberate gaps in Phase 1
 
-Recorded so they are not mistaken for oversights.
-
-- **No `IMediaCallRead`.** Apps see only the calls they are handed by an event. There is no accessor
-  for reading a call by id, so no way to answer "is this user on a call right now?".
-- **No `MEDIA_CALL` association.** Nothing lets an app declare that it handles media calls, so the
-  events dispatch to every app implementing `IMediaCallHandler` with no way to narrow the
-  subscription.
-- **The loop-back legs stay unlinked**, as decided above.
-- **The pre event fails open when the app's request times out.** `executePreMediaCallCreated`
-  rethrows the errors it sees, so an app that throws blocks the call — a policy handler that could
-  not decide must not read as `pass`. A *timed-out* request never reaches that branch:
-  `ProxiedApp.call` (`packages/apps/src/server/ProxiedApp.ts:64-86`) rethrows only
-  `AppsEngineException` and `JSONRPC_METHOD_NOT_FOUND`, and a timeout rejects with a plain `Error`
-  whose `code` is `undefined`, so both range checks are false and the method returns `undefined`
-  with nothing logged. The listener loop reads that as "no result" and the call is created.
-  This is not specific to media calls — every pre-event in the engine fails open the same way
-  (`executePreMessageSentPrevent` and the rest) — and closing it means either a call path that does
-  not swallow, or a sentinel that separates method-not-found from a swallowed failure. Left as is
-  in Phase 1 deliberately: fail-closed here means a slow app subprocess stops users from placing
-  calls, and that trade is the engine's to make once, not this event's to make alone.
-- **The event order of decision 6 holds inside one instance, and rests on a synchronous dispatch
-  path.** Both the emitter and `Apps.self.triggerEvent` are in-process, so an instance tells its own
-  apps about the transitions it performed itself; a call whose transitions land on two instances is
-  reported by each of them, in no particular order between the two. An `await` added anywhere
-  between `notifyApps` and `ProxiedApp.call` would also reorder the events of a single call, and
-  nothing in the engine enforces that it stays out.
-- **`ee/packages/media-calls` has no test harness at all** — no `test` script in its `package.json`
-  and no spec files. `CallDirector`'s pre-hook branch and the `IncomingSipCall` rejection mapping are
-  therefore covered by the Playwright suite only. Standing up mocha (or `node:test`) for that
-  package is a prerequisite for unit-testing anything further in Phase 2 or 3.
+- **No `IMediaCallRead`:** apps cannot read calls by ID or query whether a user is currently on a call.
+- **Loop-back legs remain unlinked.**
+- **Pre-event timeouts fail open:** a timeout results in no prevention and no record. This matches the engine's current pre-event behavior and is deferred because fail-closed behavior could block calls when an app is slow.
+- **Ordering is per instance:** events are ordered within one instance but not guaranteed across instances; introducing an `await` in the dispatch path could also change ordering.
+- **Only app prevention currently sounds the end-of-call tone.** Other caller-facing refusal reasons should eventually use the same mechanism; protocol-level refusals should remain silent.
 
 ## Context
 
@@ -288,6 +153,83 @@ creator/updater/extender/deleter. Each accessor is a thin per-app wrapper delega
 bridge method that performs the **permission check** then calls a `protected abstract` method the
 host implements. The canonical minimal precedent is `IVideoConferenceRead` → `VideoConferenceRead` →
 `VideoConferenceBridge` → host `AppVideoConferenceBridge` → converter → core-service.
+
+## The prevented call — the record that replaced the toast
+
+Decision 7 first sent the app's words to the caller as a toast: a `CallRejectionMessage` rode the
+`rejected-call-request` signal, `useCallRejectionToast` rendered it, and six `Call_rejected_*` keys
+carried the workspace's own wording for the refusals the server already made on its own. None of it
+survived review. A toast is the wrong carrier for an app's words: it is gone in seconds, it reaches
+only the caller, and it leaves a refused call with no record anyone can go back to. Nothing on
+`develop` toasted a rejection either, so removing it regressed nothing a user had seen, and
+`packages/media-signaling` went back to its `develop` shape apart from the one rejection reason the
+tone needs.
+
+### Why a record, and why on `media_calls`
+
+A prevented call has no call, and everything that writes call history reads an `IMediaCall`.
+`MediaCallService.saveCallToHistory` is driven by `historyUpdate`, loads the call by id, refuses
+anything that has not ended, and routes on `uids.length`. A prevented call could skip all of that on
+a path of its own, but the `callId` its history entry needs would then point at nothing, and
+`call_history`'s unique `{ uid, callId }` index forces one to be invented anyway.
+`MediaCallDirector.createCall` holds a
+finished `caller`, `callee` and `createdBy` one statement before the insert it is about to skip, so
+the cheaper answer is to do that insert.
+
+`recordPreventedCall` writes the row **already ended and already expired, in one write.** That is
+not tidiness. Every scan of `media_calls` filters on `ended: false` — `findAllExpiredCalls`,
+`findAllNotOverByUid`, `hasUnfinishedCalls`, `hasUnfinishedCallsByUid` — so an ended row is inert: it
+never expires, never reaches a client through `getUserStateSignals`, and never makes either party
+look busy. A row inserted unended, or ended in a second write that fails, would leave both parties
+permanently unable to place or receive a call, silently, with no expiry to rescue them. The insert is
+also detached from the refusal — it runs under a `.catch` that logs — because the caller must be told
+the same thing whether or not the record lands.
+
+### The record, and the two languages it has to serve
+
+`CallPreventionRecord` is one type with two members, told apart by `'key' in record`:
+
+| What an app said | What is stored |
+|---|---|
+| `EventResult.prevent({ reason })` — the words | `text`, capped at 200 characters |
+| `EventResult.prevent({ i18n })` — a key | `key`, `ns`, `args`, **and** `text`: the app's own wording for that key in the workspace's default language, snapshotted while the app was still installed |
+
+The snapshot is what lets one stored value serve two readers. A client renders
+`t(key, { ns, defaultValue: text, ...args })`: while the app is installed the key resolves in the
+app's namespace and follows the *reader's* language; once the app is uninstalled its namespace is no
+longer registered, i18next falls through to the snapshot, and a raw key never reaches a reader. The
+engine supplies the snapshot material for free — `EventResultMeta.app.translations` is the app's own
+translation of the key it named, one entry per language it ships, stamped by `makeHostEventResult`
+(see [ADR 0002](./0002-unified-event-result-for-pre-events.md)). Plural suffixes are not consulted,
+so an explanation whose wording changes with a number reads in the form the app shipped under the
+bare key.
+
+`ns` is always `app-<appId>` today and so derivable from the field beside it. It is stored anyway,
+because the record has to still read years after the app is gone: a stored namespace survives a
+change to that convention, a derived one does not. It is written from
+`EventResultMeta.app.i18nNamespace`, so no host has to know the convention.
+
+An app cannot prevent a call and say nothing: `PreventEventResult` already demands `reason` or
+`i18n`, and leaving that contract alone is how the constraint is enforced. Only a malformed payload
+reaches the host naming neither. It still prevents the call — an app that says *prevent* is honoured
+— and the record reads *Prevented by app: {{appName}}*, as a defence against a broken app rather than
+a supported way to stay silent.
+
+### The card mixes two namespaces
+
+The title is the workspace's sentence and the second line is the app's, in one card. The `info_card`
+renderer resolves every text object against a single `appId`, so `WithTranslations` gained an
+optional `ns` and both text renderers honour it, falling back to the object's own `text`. One builder
+in `ui-voip` — `getHistoryMessagePayload` — produces the blocks for the message and for the details
+panel, so the two surfaces cannot drift.
+
+### What the caller hears
+
+The tone is the caller's only immediate cue. A prevented call is refused before it is confirmed, so
+it never raises `endedCall` and the tone cannot ride that event: `Call` reads the `'prevented'`
+rejection reason off the signal, `Session` emits `preventedCall`, and `useCallSounds` plays the same
+tone an unanswered call plays. For a prevented call the card and the history entry say more; for the
+refusals that still leave no record, there is nothing yet to look at afterwards.
 
 ## `origin` — where a call comes from
 
@@ -716,12 +658,26 @@ outcomes are written as system messages via `saveCallToHistory` / `sendHistoryMe
   three contact-type combinations, on the pre context and on `toAppMediaCall`.
 - EE hook bus: `IMediaCallServer.setHooks` / `runPreCallCreatedHook`, consulted in
   `MediaCallDirector.createCall` (`ee/packages/media-calls/src/`).
-- Rejection feedback path: `packages/media-signaling/src/definition/call/common.ts`,
-  `.../signals/server/rejected-call-request.ts`,
-  `packages/ui-voip/src/providers/useCallRejectionToast.ts`.
+- The prevention record: `CallPreventionRecord` and `IMediaCall.preventedBy`
+  (`packages/core-typings/src/mediaCalls/IMediaCall.ts`); `toPreventionRecord` and
+  `resolveFallbackText` (`apps/meteor/server/services/media-call/appEvents.ts`);
+  `PreCallCreatedHookResult` (`ee/packages/media-calls/src/definition/IMediaCallServer.ts`) and
+  `MediaCallDirector.recordPreventedCall` (`.../server/CallDirector.ts`).
+- What reads it: `getCallHistoryItemState`, `saveInternalCallToHistory` and `sendHistoryMessage`
+  (`apps/meteor/server/services/media-call/service.ts`); the card builder
+  `getHistoryMessagePayload`, `CallHistoryTableStatus` and `CallHistoryContextualbar`
+  (`packages/ui-voip/src/`); `CallHistoryPageFilters` (`apps/meteor/client/views/mediaCallHistory/`),
+  where *Prevented* is a filter of its own; the optional `ns` on `WithTranslations`
+  (`packages/ui-kit`) and the two renderers in `packages/fuselage-ui-kit` that honour it. Keys:
+  `Voice_call_not_placed`, `Prevented`, `Prevented_by_app` in `packages/i18n`.
+- The tone: the `'prevented'` member of `callRejectedReasonList`
+  (`packages/media-signaling/src/definition/call/IClientMediaCall.ts`), `Call.prevented`, the
+  `preventedCall` session event, and `useCallSounds` via `MediaCallViewProvider`.
 - E2E: `apps/meteor/tests/e2e/apps/media-call-events.spec.ts`, against the `media-call-events-test`
   fixture app (`apps/meteor/tests/data/apps/app-packages/`). It covers WebRTC calls reaching the app
-  with `origin === 'internal'`. The SIP paths need a PBX in CI, which the suite does not have — a
+  with `origin === 'internal'`, and the prevention end to end — the fixture's `prevent` and
+  `prevent-i18n` modes, the stored record, the tone, the caller-only history entry and the card in
+  the direct message. The SIP paths need a PBX in CI, which the suite does not have — a
   deliberate gap, recorded rather than hidden.
 - `packages/apps-engine/definition/` is build output and gitignored; only `src/definition/` is
   edited.
