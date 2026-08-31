@@ -137,39 +137,39 @@ describe('Push Notifications [PushClass]', () => {
 		});
 
 		it('sends a regular notification to an apn document via APN with the plain topic', async () => {
-			const app = makePushToken({ tokenType: 'apn', tokenValue: 'APN_TOKEN' });
-			await Push.sendNotificationNative(app, { useVoipToken: false }, [], []);
+			const pushToken = makePushToken({ tokenType: 'apn', tokenValue: 'APN_TOKEN' });
+			await Push.sendNotificationNative(pushToken, { useVoipToken: false }, [], []);
 			expect(sendAPNStub.calledOnce).to.be.true;
 			expect(sendAPNStub.firstCall.args[0].userToken).to.equal('APN_TOKEN');
 			expect(sendAPNStub.firstCall.args[0].notification.topic).to.equal('app');
 		});
 
 		it('sends a voip notification to a voip document via APN with the .voip topic', async () => {
-			const app = makePushToken({ tokenType: 'voip', tokenValue: 'VOIP_TOKEN' });
-			await Push.sendNotificationNative(app, { useVoipToken: true }, [], []);
+			const pushToken = makePushToken({ tokenType: 'voip', tokenValue: 'VOIP_TOKEN' });
+			await Push.sendNotificationNative(pushToken, { useVoipToken: true }, [], []);
 			expect(sendAPNStub.calledOnce).to.be.true;
 			expect(sendAPNStub.firstCall.args[0].userToken).to.equal('VOIP_TOKEN');
 			expect(sendAPNStub.firstCall.args[0].notification.topic).to.equal('app.voip');
 		});
 
 		it('skips an apn document when the notification is voip', async () => {
-			const app = makePushToken({ tokenType: 'apn', tokenValue: 'APN_TOKEN' });
-			await Push.sendNotificationNative(app, { useVoipToken: true }, [], []);
+			const pushToken = makePushToken({ tokenType: 'apn', tokenValue: 'APN_TOKEN' });
+			await Push.sendNotificationNative(pushToken, { useVoipToken: true }, [], []);
 			expect(sendAPNStub.called).to.be.false;
 			expect(sendFCMStub.called).to.be.false;
 		});
 
 		it('skips a voip document when the notification is regular', async () => {
-			const app = makePushToken({ tokenType: 'voip', tokenValue: 'VOIP_TOKEN' });
-			await Push.sendNotificationNative(app, { useVoipToken: false }, [], []);
+			const pushToken = makePushToken({ tokenType: 'voip', tokenValue: 'VOIP_TOKEN' });
+			await Push.sendNotificationNative(pushToken, { useVoipToken: false }, [], []);
 			expect(sendAPNStub.called).to.be.false;
 			expect(sendFCMStub.called).to.be.false;
 		});
 
 		it('sends a regular notification to a gcm document via FCM', async () => {
 			sinon.stub(Push, 'getNativeNotificationAuthorizationCredentials').resolves({ token: 'FCM_AUTH', projectId: 'proj' });
-			const app = makePushToken({ tokenType: 'gcm', tokenValue: 'GCM_TOKEN' });
-			await Push.sendNotificationNative(app, { useVoipToken: false }, [], []);
+			const pushToken = makePushToken({ tokenType: 'gcm', tokenValue: 'GCM_TOKEN' });
+			await Push.sendNotificationNative(pushToken, { useVoipToken: false }, [], []);
 			expect(sendFCMStub.calledOnce).to.be.true;
 			expect(sendFCMStub.firstCall.args[0].userTokens).to.equal('GCM_TOKEN');
 		});
