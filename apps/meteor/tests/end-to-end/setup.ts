@@ -13,5 +13,7 @@ before(async () => {
 });
 
 after(async () => {
-	await updateSetting('API_Enable_Rate_Limiter_Dev', rateLimiterInDevWasEnabled);
+	if (rateLimiterInDevWasEnabled !== undefined) {
+		await updateSetting('API_Enable_Rate_Limiter_Dev', rateLimiterInDevWasEnabled);
+	}
 });
