@@ -25,6 +25,7 @@ import {
 	isChatGetStarredMessagesProps,
 	isChatGetDiscussionsProps,
 	validateBadRequestErrorResponse,
+	validateTooManyRequestsErrorResponse,
 	validateUnauthorizedErrorResponse,
 } from '@rocket.chat/rest-typings';
 import { escapeRegExp } from '@rocket.chat/tools';
@@ -909,6 +910,7 @@ const chatEndpoints = API.v1
 				}),
 				400: validateBadRequestErrorResponse,
 				401: validateUnauthorizedErrorResponse,
+				429: validateTooManyRequestsErrorResponse,
 			},
 		},
 		async function action() {

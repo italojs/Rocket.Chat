@@ -259,7 +259,6 @@ export class APIClass<TBasePath extends string = '', TOperations extends Record<
 		return (
 			(typeof rateLimiterOptions === 'object' || rateLimiterOptions === undefined) &&
 			Boolean(this.version) &&
-			!process.env.TEST_MODE &&
 			Boolean(defaultRateLimiterOptions.numRequestsAllowed && defaultRateLimiterOptions.intervalTimeInMS)
 		);
 	}
@@ -418,7 +417,8 @@ export class APIClass<TBasePath extends string = '', TOperations extends Record<
 		return (
 			rateLimiterDictionary.hasOwnProperty(route) &&
 			settings.get<boolean>('API_Enable_Rate_Limiter') === true &&
-			(process.env.NODE_ENV !== 'development' || settings.get<boolean>('API_Enable_Rate_Limiter_Dev') === true) &&
+			((process.env.NODE_ENV !== 'development' && !process.env.TEST_MODE) ||
+				settings.get<boolean>('API_Enable_Rate_Limiter_Dev') === true) &&
 			!(userId && (await hasPermissionAsync(userId, 'api-bypass-rate-limit')))
 		);
 	}

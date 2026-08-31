@@ -127,6 +127,23 @@ const NotFoundErrorResponseSchema = {
 
 export const validateNotFoundErrorResponse = ajv.compile<NotFoundErrorResponse>(NotFoundErrorResponseSchema);
 
+type TooManyRequestsErrorResponse = {
+	success: false;
+	error: string;
+};
+
+const TooManyRequestsErrorResponseSchema = {
+	type: 'object',
+	properties: {
+		success: { type: 'boolean', enum: [false] },
+		error: { type: 'string' },
+	},
+	required: ['success', 'error'],
+	additionalProperties: false,
+};
+
+export const validateTooManyRequestsErrorResponse = ajv.compile<TooManyRequestsErrorResponse>(TooManyRequestsErrorResponseSchema);
+
 type InternalErrorResponse = {
 	success: false;
 	error: string;
