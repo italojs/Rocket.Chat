@@ -37,5 +37,5 @@ export interface IPushTokenModel extends IBaseModel<IPushToken> {
 	removeAllByUserId(userId: string): Promise<DeleteResult>;
 	removeAllByTokenStringAndUserId(token: string, userId: string): Promise<DeleteResult>;
 	removeByTokenString(token: string): Promise<DeleteResult>;
-	removeVoipTokensByAuthToken(authToken: IPushToken['authToken']): Promise<DeleteResult>;
+	removeVoipTokensByUserIdAndAuthToken(userId: IPushToken['userId'], authToken: IPushToken['authToken']): Promise<DeleteResult>;
 }

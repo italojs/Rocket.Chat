@@ -117,7 +117,7 @@ export class PushTokenRaw extends BaseRaw<IPushToken> implements IPushTokenModel
 		return this.deleteMany({ tokenValue: token });
 	}
 
-	removeVoipTokensByAuthToken(authToken: IPushToken['authToken']): Promise<DeleteResult> {
-		return this.deleteMany({ authToken, tokenType: 'voip' });
+	removeVoipTokensByUserIdAndAuthToken(userId: IPushToken['userId'], authToken: IPushToken['authToken']): Promise<DeleteResult> {
+		return this.deleteMany({ userId, authToken, tokenType: 'voip' });
 	}
 }

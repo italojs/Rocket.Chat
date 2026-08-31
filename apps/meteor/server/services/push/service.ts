@@ -41,7 +41,7 @@ export class PushService extends ServiceClassInternal implements IPushService {
 		if (data.voipToken) {
 			await registerPushToken({ tokenType: 'voip', tokenValue: data.voipToken, authToken, appName, userId });
 		} else {
-			await PushToken.removeVoipTokensByAuthToken(authToken);
+			await PushToken.removeVoipTokensByUserIdAndAuthToken(userId, authToken);
 		}
 
 		const updatedDoc = await PushToken.findOneById<Omit<IPushToken, 'authToken'>>(tokenId, { projection: { authToken: 0 } });

@@ -8,7 +8,7 @@ const sandbox = sinon.createSandbox();
 
 const pushTokenModelStub = {
 	findOneById: sandbox.stub(),
-	removeVoipTokensByAuthToken: sandbox.stub(),
+	removeVoipTokensByUserIdAndAuthToken: sandbox.stub(),
 };
 const registerPushTokenStub = sandbox.stub();
 const loggerStub = { debug: sandbox.stub(), warn: sandbox.stub(), error: sandbox.stub(), info: sandbox.stub() };
@@ -33,7 +33,7 @@ describe('PushService.registerPushToken()', () => {
 		sandbox.reset();
 		registerPushTokenStub.resolves('token-id');
 		pushTokenModelStub.findOneById.resolves({ _id: 'token-id', tokenType: 'gcm', tokenValue: 'GCM_TOKEN' });
-		pushTokenModelStub.removeVoipTokensByAuthToken.resolves({ deletedCount: 0 });
+		pushTokenModelStub.removeVoipTokensByUserIdAndAuthToken.resolves({ deletedCount: 0 });
 		service = new PushService();
 	});
 
@@ -45,19 +45,34 @@ describe('PushService.registerPushToken()', () => {
 		...overrides,
 	});
 
-	it('registers a separate voip document when a voip token is provided', async () => {
-		await service.registerPushToken(input({ voipToken: 'VOIP_TOKEN' }));
+	it('registers a separate voip document without disturbing the device token', async () => {
+		const result = await service.registerPushToken(input({ voipToken: 'VOIP_TOKEN' }));
 
 		expect(registerPushTokenStub.calledTwice).to.be.true;
+		expect(registerPushTokenStub.firstCall.args[0]).to.include({ tokenType: 'gcm', tokenValue: 'GCM_TOKEN' });
 		expect(registerPushTokenStub.secondCall.args[0]).to.include({ tokenType: 'voip', tokenValue: 'VOIP_TOKEN' });
-		expect(pushTokenModelStub.removeVoipTokensByAuthToken.called).to.be.false;
+		expect(pushTokenModelStub.removeVoipTokensByUserIdAndAuthToken.called).to.be.false;
+
+		expect(pushTokenModelStub.findOneById.firstCall.args[0]).to.equal('token-id');
+		expect(pushTokenModelStub.findOneById.firstCall.args[1]).to.deep.equal({ projection: { authToken: 0 } });
+		expect(result).to.include({ tokenType: 'gcm', tokenValue: 'GCM_TOKEN' });
+	});
+
+	it('derives the token type and value from an apn payload', async () => {
+		pushTokenModelStub.findOneById.resolves({ _id: 'token-id', tokenType: 'apn', tokenValue: 'APN_TOKEN' });
+
+		const result = await service.registerPushToken(input({ token: { apn: 'APN_TOKEN' } }));
+
+		expect(registerPushTokenStub.calledOnce).to.be.true;
+		expect(registerPushTokenStub.firstCall.args[0]).to.include({ tokenType: 'apn', tokenValue: 'APN_TOKEN' });
+		expect(result).to.include({ tokenType: 'apn', tokenValue: 'APN_TOKEN' });
 	});
 
 	it('removes a previously registered voip document when the device re-registers without a voip token', async () => {
 		await service.registerPushToken(input());
 
 		expect(registerPushTokenStub.calledOnce).to.be.true;
-		expect(pushTokenModelStub.removeVoipTokensByAuthToken.calledOnce).to.be.true;
-		expect(pushTokenModelStub.removeVoipTokensByAuthToken.firstCall.args[0]).to.equal('hashed-auth-token');
+		expect(pushTokenModelStub.removeVoipTokensByUserIdAndAuthToken.calledOnce).to.be.true;
+		expect(pushTokenModelStub.removeVoipTokensByUserIdAndAuthToken.firstCall.args).to.deep.equal(['user1', 'hashed-auth-token']);
 	});
 });
