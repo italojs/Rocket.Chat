@@ -195,10 +195,6 @@ class PushClass {
 	): Promise<void> {
 		logger.debug({ msg: 'send to token', tokenType: pushToken.tokenType });
 
-		if ((pushToken.tokenType === 'voip') !== Boolean(notification.useVoipToken)) {
-			return;
-		}
-
 		if (pushToken.tokenType === 'gcm') {
 			if (!pushToken.tokenValue) {
 				return;
@@ -222,6 +218,10 @@ class PushClass {
 				_removeToken: this.removeToken,
 				options: sendGCMOptions as RequiredField<PushOptions, 'gcm'>,
 			});
+			return;
+		}
+
+		if ((pushToken.tokenType === 'voip') !== Boolean(notification.useVoipToken)) {
 			return;
 		}
 
@@ -352,12 +352,20 @@ class PushClass {
 			maxRetries: notification.useVoipToken ? 0 : PUSH_GATEWAY_MAX_RETRIES,
 		};
 
-		if ((pushToken.tokenType === 'voip') !== Boolean(notification.useVoipToken)) {
-			return;
-		}
-
 		for (const gateway of this.options.gateways) {
 			logger.debug({ msg: 'send to token', tokenType: pushToken.tokenType });
+
+			if (pushToken.tokenType === 'gcm') {
+				if (pushToken.tokenValue) {
+					countGcm.push(pushToken._id);
+					return this.sendGatewayPush(gateway, 'gcm', pushToken.tokenValue, gatewayNotification, retryOptions);
+				}
+				continue;
+			}
+
+			if ((pushToken.tokenType === 'voip') !== Boolean(notification.useVoipToken)) {
+				return;
+			}
 
 			if (pushToken.tokenType === 'apn' || pushToken.tokenType === 'voip') {
 				const topic = pushToken.tokenType === 'voip' ? `${pushToken.appName}.voip` : pushToken.appName;
@@ -365,13 +373,6 @@ class PushClass {
 				if (pushToken.tokenValue) {
 					countApn.push(pushToken._id);
 					return this.sendGatewayPush(gateway, 'apn', pushToken.tokenValue, { topic, ...gatewayNotification }, retryOptions);
-				}
-			}
-
-			if (pushToken.tokenType === 'gcm') {
-				if (pushToken.tokenValue) {
-					countGcm.push(pushToken._id);
-					return this.sendGatewayPush(gateway, 'gcm', pushToken.tokenValue, gatewayNotification, retryOptions);
 				}
 			}
 		}
